@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>3Dモデル プレビュー（OBJ / Three.js / スマホ対応）</title>
+  <meta name="description" content="three.jsでOBJをスマホでぐりぐり回せる軽量プレビュー。ファイルパス（URLパラメータ）でモデルを指定。" />
+  <style>
+    :root { --bg:#0b0f14; --panel:rgba(20,24,31,.75); --text:#e8eef7; --muted:#9fb2c7; --accent:#7cc4ff; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    #app { position: fixed; inset: 0; display: grid; grid-template-rows: 1fr auto; overflow: hidden; }
+    #stage { position: relative; background: radial-gradient(1200px 600px at 50% 120%, #0f141d, #0b0f14); }
+    canvas { display:block; width:100%; height:100%; touch-action:none; }
+    .brand { position:absolute; left: env(safe-area-inset-left); top: env(safe-area-inset-top); margin:12px; padding:8px 10px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; background:var(--panel); backdrop-filter: blur(8px); border:1px solid rgba(255,255,255,.06); border-radius:12px; user-select:none; }
+    #toolbar { display:grid; grid-auto-flow:column; gap:8px; padding:10px; align-items:center; justify-content:center; background: linear-gradient(to bottom, rgba(0,0,0,.0), rgba(0,0,0,.1)), var(--panel); border-top:1px solid rgba(255,255,255,.06); position: sticky; bottom:0; z-index:5; }
+    .btn { display:inline-flex; align-items:center; gap:8px; height:40px; padding:0 12px; border-radius:12px; background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); color:var(--text); font-size:14px; cursor:pointer; transition: transform .05s ease, background .2s ease, border-color .2s ease; }
+    .btn:active { transform: translateY(1px); }
+    .btn[aria-pressed="true"] { outline:2px solid var(--accent); }
+    #progress { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); width:min(70vw,360px); height:6px; background: rgba(255,255,255,.06); border-radius:999px; overflow:hidden; opacity:0; transition:opacity .2s ease; }
+    #progress .bar { height:100%; width:0%; background: linear-gradient(90deg, var(--accent), #a0e9ff); }
+    #toast { position:absolute; left:50%; top:16px; transform:translateX(-50%); background: var(--panel); border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:8px 12px; font-size:13px; color:var(--muted); opacity:0; transition:opacity .2s ease; }
+    #toast.show { opacity:1; }
+    @media (max-width:480px) { .btn span{display:none;} .btn{padding:0 10px;} .brand{font-size:10px;} }
+  </style>
+
+  <!-- Three.js import map (version pinned for stability) -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="stage">
+      <div class="brand">Three.js OBJ Preview</div>
+      <div id="progress"><div class="bar"></div></div>
+      <div id="toast"></div>
+    </div>
+    <div id="toolbar">
+      <button class="btn" id="autorotateBtn" aria-pressed="false" title="自動回転オン/オフ">🔄 <span>自動回転</span></button>
+      <button class="btn" id="resetBtn" title="ビューをリセット">🎯 <span>リセット</span></button>
+      <button class="btn" id="gridBtn" aria-pressed="true" title="グリッド表示">#️⃣ <span>グリッド</span></button>
+      <button class="btn" id="bgBtn" title="背景の切替">🌓 <span>背景</span></button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+    import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+    import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+
+    // DOM refs
+    const stage = document.getElementById('stage');
+    const progress = document.getElementById('progress');
+    const bar = progress.querySelector('.bar');
+    const toast = document.getElementById('toast');
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(stage.clientWidth, stage.clientHeight);
+    stage.appendChild(renderer.domElement);
+
+    // Scene & Camera
+    const scene = new THREE.Scene();
+    scene.background = null; // transparent (toggleable)
+
+    const camera = new THREE.PerspectiveCamera(60, stage.clientWidth / stage.clientHeight, 0.01, 1000);
+    camera.position.set(2.4, 1.4, 2.4);
+
+    // Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = true;
+    controls.minDistance = 0.1;
+    controls.maxDistance = 50;
+
+    // Grid & lights
+    const grid = new THREE.GridHelper(10, 20, 0x335577, 0x223344);
+    grid.material.opacity = 0.25; grid.material.transparent = true; scene.add(grid);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.9);
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0); dir.position.set(5,6,4); scene.add(hemi, dir);
+
+    // Environment (optional HDR)
+    const pmrem = new THREE.PMREMGenerator(renderer); let envMap = null;
+    const params = new URLSearchParams(location.search);
+    const hdrUrl = params.get('hdr');
+    if (hdrUrl) {
+      new RGBELoader().load(hdrUrl, (hdr)=>{ envMap = pmrem.fromEquirectangular(hdr).texture; scene.environment = envMap; hdr.dispose(); });
+    }
+
+    // Model pivot
+    const pivot = new THREE.Group(); scene.add(pivot);
+    let currentObject = null; let autoRotate = false; let backgroundSolid = false;
+
+    // Helpers
+    function showToast(msg){ toast.textContent = msg; toast.classList.add('show'); clearTimeout(showToast.t); showToast.t = setTimeout(()=>toast.classList.remove('show'), 2000); }
+
+    const manager = new THREE.LoadingManager();
+    manager.onStart = () => { progress.style.opacity = 1; bar.style.width = '0%'; };
+    manager.onProgress = (_, loaded, total) => { bar.style.width = `${Math.round(loaded/total*100)}%`; };
+    manager.onLoad = () => { progress.style.opacity = 0; };
+
+    const objLoader = new OBJLoader(manager);
+    const mtlLoader = new MTLLoader(manager);
+
+    function frameSelection(object, padding=1.2){
+      const box = new THREE.Box3().setFromObject(object, true);
+      const size = box.getSize(new THREE.Vector3()); const center = box.getCenter(new THREE.Vector3());
+      if (!isFinite(size.length())) return;
+      const offset = center.clone().multiplyScalar(-1); pivot.position.copy(offset); controls.target.set(0,0,0);
+      const maxDim = Math.max(size.x, size.y, size.z); const fov = camera.fov * Math.PI/180;
+      let camZ = (maxDim / (2*Math.tan(fov/2))) * padding; camZ = Math.min(Math.max(camZ, 0.5), 100);
+      const dir = new THREE.Vector3(1,0.75,1).normalize(); camera.position.copy(dir.multiplyScalar(camZ));
+      camera.near = camZ/100; camera.far = camZ*100; camera.updateProjectionMatrix(); controls.update();
+    }
+
+    function clearModel(){ if(currentObject){ pivot.remove(currentObject); currentObject.traverse(n=>{ if(n.isMesh){ n.geometry?.dispose?.(); if(Array.isArray(n.material)) n.material.forEach(m=>m.dispose?.()); else n.material?.dispose?.(); } }); currentObject=null; } }
+
+    async function loadOBJ(objUrl, mtlUrl){
+      try{
+        clearModel();
+        if(mtlUrl){
+          const materials = await mtlLoader.loadAsync(mtlUrl);
+          materials.preload();
+          objLoader.setMaterials(materials);
+        } else {
+          objLoader.setMaterials(null);
+        }
+        const root = await objLoader.loadAsync(objUrl);
+        // 標準材質へ置き換え（発光しがちなOBJ対策）
+        root.traverse(n=>{ if(n.isMesh && !(n.material && 'metalness' in n.material)) { n.material = new THREE.MeshStandardMaterial({ color: n.material?.color || new THREE.Color(0xdddddd), metalness:0.1, roughness:0.8 }); } });
+        if(envMap){ root.traverse(n=>{ if(n.isMesh) n.material.envMapIntensity = 1.0; }); }
+        currentObject = root; pivot.add(root); frameSelection(root);
+        const scale = parseFloat(params.get('scale')||'1'); if(isFinite(scale) && scale!==1){ root.scale.setScalar(scale); frameSelection(root); }
+        showToast('OBJを読み込みました');
+      }catch(e){ console.error(e); showToast('読み込みに失敗しました（.obj（+ .mtl）に対応）'); }
+    }
+
+    // URLパラメータからモデル指定
+    // 例: /index.html?model=/assets/model.obj&mtl=/assets/model.mtl&scale=1.0&hdr=/assets/studio_small_09_2k.hdr
+    const modelUrl = params.get('model') || './model.obj';
+    const mtlUrl = params.get('mtl');
+    loadOBJ(modelUrl, mtlUrl);
+
+    // Toolbar
+    const autorotateBtn = document.getElementById('autorotateBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const gridBtn = document.getElementById('gridBtn');
+    const bgBtn = document.getElementById('bgBtn');
+
+    autorotateBtn.addEventListener('click', ()=>{ autoRotate = !autoRotate; autorotateBtn.setAttribute('aria-pressed', String(autoRotate)); });
+    resetBtn.addEventListener('click', ()=>{ controls.reset(); frameSelection(currentObject || pivot, 1.4); });
+    gridBtn.addEventListener('click', ()=>{ const active = gridBtn.getAttribute('aria-pressed') !== 'true'; gridBtn.setAttribute('aria-pressed', String(active)); grid.visible = active; });
+    bgBtn.addEventListener('click', ()=>{ backgroundSolid = !backgroundSolid; scene.background = backgroundSolid ? new THREE.Color('#0b0f14') : null; });
+
+    // Resize
+    function onResize(){ const w = stage.clientWidth, h = stage.clientHeight; renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix(); }
+    window.addEventListener('resize', onResize); onResize();
+
+    // Animate
+    let last = performance.now();
+    function tick(now){ const dt = Math.min((now-last)/1000, 1/15); last = now; if(autoRotate && currentObject) currentObject.rotation.y += dt*0.6; controls.update(); renderer.render(scene, camera); requestAnimationFrame(tick); }
+    requestAnimationFrame(tick);
+
+    // Helpful console tips
+    console.log('%cUsage:', 'color:#7cc4ff', 'URLに ?model=path/to.obj を付けてアクセスします。?mtl=path/to.mtl, ?scale=1, ?hdr=path/to.hdr も使用可能。');
+  </script>
+
+  <!-- 使い方（ファイルパス指定版 / OBJ）
+  1) このファイルを index.html として保存し、Webサーバー配下に配置。
+  2) モデル/マテリアル/環境HDRを同じサーバーに置く。
+  3) スマホ/PCから例えば以下のURLでアクセス：
+     /index.html?model=/assets/teapot.obj
+     /index.html?model=/assets/teapot.obj&mtl=/assets/teapot.mtl
+     /index.html?model=/assets/teapot.obj&mtl=/assets/teapot.mtl&scale=0.01&hdr=/assets/studio_small_09_2k.hdr
+
+  メモ：
+  - CORSに注意。別ドメインのモデルを指定する場合はサーバー側でCORS許可が必要です。
+  - OBJの法線/マテリアルが崩れる場合、DCC側で法線再計算やmikkTSpaceなどの出力設定を見直してください。
+  - 軽量化には、gltf/glb+DRACO/KTX2が有利ですが要件上OBJ固定でもOK。
+  - 影を使いたい場合は shadowMap を有効化して床(Plane+ShadowMaterial)を追加してください。
+  -->
+</body>
+</html>
