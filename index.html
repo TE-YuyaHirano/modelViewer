@@ -78,10 +78,22 @@
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+    // Sketchfab寄り：色味を崩しにくい Neutral をデフォルトに（必要なら ?tonemap=aces でACESに戻せます）
+    const tonemap = (params.get('tonemap') || 'neutral').toLowerCase(); // neutral | aces | linear
+    renderer.toneMapping = (tonemap === 'aces')
+      ? THREE.ACESFilmicToneMapping
+      : (tonemap === 'linear')
+        ? THREE.LinearToneMapping
+        : THREE.NeutralToneMapping;
+
     // 露出（明るさ）：URLで調整可能 例) ?exposure=1.0
-    const exposure = parseFloat(params.get('exposure') || '1.1');
-    renderer.toneMappingExposure = (isFinite(exposure) ? exposure : 1.1);
+    const exposure = parseFloat(params.get('exposure') || '1.0');
+    renderer.toneMappingExposure = (isFinite(exposure) ? exposure : 1.0);
+
+    // ライト計算をよりPBR寄りに（見た目の安定性が上がる）
+    renderer.physicallyCorrectLights = true;
+
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(stage.clientWidth, stage.clientHeight);
     // 影：URLで無効化/シャープ切替 例) ?shadows=off  /  ?shadowSoft=on
@@ -119,30 +131,32 @@
 
     scene.add(grid);
 
-    // Lights（スタジオ寄り：ブロックは白飛びさせない／床は少し持ち上げる）
-    const amb = new THREE.AmbientLight(0xffffff, 0.10);
+    // Lights（Sketchfabの“ニュートラルスタジオ”寄り）
+    // ねらい：床（緑）が暗く沈まないように「間接光」を厚めにしつつ、赤がオレンジに転ばないように白飛びを抑える
 
-    // 半球ライト：下側を少し明るめにして床の“受け”を上げる
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xe9eef6, 0.62);
+    // 全体の底上げ（暗部を持ち上げる）
+    const amb = new THREE.AmbientLight(0xffffff, 0.22);
 
-    // メインライト（影を作る主役）
-    const key = new THREE.DirectionalLight(0xffffff, 1.10);
-    key.position.set(7, 10, 6);
+    // 半球ライト：地面側を明るめグレーにして床の受けを強化（緑の沈みを軽減）
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xf2f5fb, 1.05);
+
+    // メインライト（影を作る主役：強すぎると赤が薄く/オレンジ寄りに見えるので控えめ）
+    const key = new THREE.DirectionalLight(0xffffff, 0.95);
+    key.position.set(6, 9, 7);
     key.castShadow = !shadowsOff;
-    // DirectionalLight のターゲットを明示（影の位置がブレにくい）
     scene.add(key.target);
 
-    // フィル（影を潰しすぎない）
-    const fill = new THREE.DirectionalLight(0xffffff, 0.38);
-    fill.position.set(-6, 6, 6);
+    // フィル（影を潰しすぎずに持ち上げる）
+    const fill = new THREE.DirectionalLight(0xffffff, 0.55);
+    fill.position.set(-7, 5, 6);
 
-    // リム（輪郭）
-    const rim = new THREE.DirectionalLight(0xffffff, 0.18);
-    rim.position.set(0, 8, -10);
+    // リム（輪郭：弱め）
+    const rim = new THREE.DirectionalLight(0xffffff, 0.22);
+    rim.position.set(0, 7, -9);
 
     // トップ（床の暗さ対策：薄く）
-    const top = new THREE.DirectionalLight(0xffffff, 0.14);
-    top.position.set(0, 14, 0);
+    const top = new THREE.DirectionalLight(0xffffff, 0.18);
+    top.position.set(0, 13, 0);
 
     // 影の品質設定（シャープ寄り）
     // - mapSize を上げるほど輪郭が綺麗（重くなる）
@@ -162,11 +176,13 @@
 
     scene.add(amb, hemi, key, fill, rim, top);
 
-    // 影受け（透明床）: 例) ?shadowCatcher=off で無効化
-    const shadowCatcherOff = (params.get('shadowCatcher') || '').toLowerCase() === 'off';
+    // 影受け（透明床）
+    // デフォルトは無効（影が“透明床”に落ちないようにする）。
+    // 必要なときだけ URL で ?shadowCatcher=on を付けて有効化できます。
+    const shadowCatcherOn = (params.get('shadowCatcher') || '').toLowerCase() === 'on';
     let shadowCatcher = null;
 
-    if (!shadowsOff && !shadowCatcherOff) {
+    if (!shadowsOff && shadowCatcherOn) {
       // 影の濃さ：例) ?shadowOpacity=0.35
       // デフォルトは「見える」濃さに寄せる（シャープ影は少し濃いめ）
       const shadowOpacity = parseFloat(params.get('shadowOpacity') || (shadowSoft ? '0.24' : '0.36'));
@@ -396,6 +412,11 @@
         if (mtlUrl) {
           const mtlAbs = new URL(mtlUrl, location.href).href;
           const materials = await mtlLoader.loadAsync(mtlAbs);
+          // OBJ/MTL テクスチャの向きを統一（念のため）
+          for (const k in materials.materials) {
+            const m = materials.materials[k];
+            if (m?.map) m.map.flipY = true;
+          }
           materials.preload();
           objLoader.setMaterials(materials);
         } else {
@@ -405,8 +426,9 @@
         const root = await objLoader.loadAsync(objAbs);
 
         // PBR寄りに寄せる（見た目安定）
+        // NOTE: MTLLoader が作った map_Kd（material.map）を捨てないこと！
         // 目的：ブロックは明るすぎない／床（暗色）は少しだけ持ち上げる
-        const envInt = parseFloat(params.get('envIntensity') || '0.75'); // 反射強さ（強すぎると白飛び）
+        const envInt = parseFloat(params.get('envIntensity') || '1.0'); // 反射強さ（強すぎると白飛び）
         const floorBoost = parseFloat(params.get('floorBoost') || '3.0'); // 暗色だけ明るく
 
         function luminance(color) {
@@ -414,33 +436,71 @@
           return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
         }
 
-        root.traverse((n) => {
-          if (n.isMesh) {
-            const c = n.material?.color ? n.material.color.clone() : new THREE.Color(0xdddddd);
+        function toStandardMaterial(src) {
+          // MTLLoader は MeshPhongMaterial を返すことが多い
+          const srcMat = src || {};
+          const baseColor = srcMat.color ? srcMat.color.clone() : new THREE.Color(0xdddddd);
 
-            // LEGOっぽい質感：白飛びしにくい設定
-            const std = new THREE.MeshStandardMaterial({
-              color: c,
-              metalness: 0.03,
-              roughness: 0.8
-            });
+          const std = new THREE.MeshStandardMaterial({
+            color: baseColor,
+            metalness: 0.03,
+            roughness: 0.8,
+            transparent: !!srcMat.transparent,
+            opacity: (typeof srcMat.opacity === 'number') ? srcMat.opacity : 1.0,
+            side: (typeof srcMat.side === 'number') ? srcMat.side : THREE.FrontSide,
+          });
 
-            std.envMapIntensity = (isFinite(envInt) ? envInt : 0.75);
-
-            // 暗い色（床など）だけ少しだけ明るくする
-            const lum = luminance(std.color);
-            if (isFinite(floorBoost) && floorBoost !== 1.0 && lum < 0.24) {
-              std.color.multiplyScalar(floorBoost);
-            }
-
-            n.material = std;
-
-            // 影
-            n.castShadow = !shadowsOff;
-            n.receiveShadow = !shadowsOff;
-
-            if (n.geometry && !n.geometry.attributes.normal) n.geometry.computeVertexNormals();
+          // --- Preserve texture maps from MTL (map_Kd etc.) ---
+          if (srcMat.map) {
+            std.map = srcMat.map;
+            // Diffuse は sRGB
+            std.map.colorSpace = THREE.SRGBColorSpace;
+            std.map.needsUpdate = true;
           }
+
+          // Alpha/opacity
+          if (srcMat.alphaMap) std.alphaMap = srcMat.alphaMap;
+          if (srcMat.transparent || srcMat.alphaMap) std.transparent = true;
+
+          // Normal / bump
+          if (srcMat.normalMap) std.normalMap = srcMat.normalMap;
+          if (srcMat.bumpMap) std.bumpMap = srcMat.bumpMap;
+          if (typeof srcMat.bumpScale === 'number') std.bumpScale = srcMat.bumpScale;
+
+          // Emissive（あれば）
+          if (srcMat.emissive) std.emissive = srcMat.emissive.clone();
+          if (srcMat.emissiveMap) {
+            std.emissiveMap = srcMat.emissiveMap;
+            std.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+            std.emissiveMap.needsUpdate = true;
+          }
+
+          std.envMapIntensity = (isFinite(envInt) ? envInt : 0.75);
+
+          // 暗い色（床など）だけ少しだけ明るくする
+          const lum = luminance(std.color);
+          if (isFinite(floorBoost) && floorBoost !== 1.0 && lum < 0.24) {
+            std.color.multiplyScalar(floorBoost);
+          }
+
+          return std;
+        }
+
+        root.traverse((n) => {
+          if (!n.isMesh) return;
+
+          // material が配列（マルチマテリアル）な場合もある
+          if (Array.isArray(n.material)) {
+            n.material = n.material.map((m) => toStandardMaterial(m));
+          } else {
+            n.material = toStandardMaterial(n.material);
+          }
+
+          // 影
+          n.castShadow = !shadowsOff;
+          n.receiveShadow = !shadowsOff;
+
+          if (n.geometry && !n.geometry.attributes.normal) n.geometry.computeVertexNormals();
         });
 
         currentObject = root;
@@ -555,7 +615,7 @@
     }
     requestAnimationFrame(tick);
 
-    console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  intro=off');
+    console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  intro=off');
   </script>
 
   <!--
