@@ -42,7 +42,7 @@
     <div id="toolbar" aria-label="viewer-controls">
       <button class="btn" id="autorotateBtn" aria-pressed="false" title="自動回転オン/オフ">🔄 <span>自動回転</span></button>
       <button class="btn" id="resetBtn" title="ビューをリセット">🎯 <span>リセット</span></button>
-      <button class="btn" id="gridBtn" aria-pressed="true" title="グリッド表示">#️⃣ <span>グリッド</span></button>
+      <button class="btn" id="gridBtn" aria-pressed="false" title="グリッド表示">#️⃣ <span>グリッド</span></button>
       <button class="btn" id="bgBtn" title="背景の切替">🌓 <span>背景</span></button>
     </div>
   </div>
@@ -79,10 +79,16 @@
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    // 露出（明るさ）：URLで調整可能 例) ?exposure=1.0
+    const exposure = parseFloat(params.get('exposure') || '1.1');
+    renderer.toneMappingExposure = (isFinite(exposure) ? exposure : 1.1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(stage.clientWidth, stage.clientHeight);
-    renderer.shadowMap.enabled = false; // 影が欲しくなってからtrue推奨
+    // 影：URLで無効化/シャープ切替 例) ?shadows=off  /  ?shadowSoft=on
+    const shadowsOff = (params.get('shadows') || '').toLowerCase() === 'off';
+    const shadowSoft = (params.get('shadowSoft') || '').toLowerCase() === 'on'; // デフォルトはシャープ
+    renderer.shadowMap.enabled = !shadowsOff;
+    renderer.shadowMap.type = shadowSoft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     stage.appendChild(renderer.domElement);
 
     // Scene & Camera
@@ -102,21 +108,75 @@
     controls.minDistance = 0.1;
     controls.maxDistance = 5000;
 
-    // Grid
+    // Grid（中央に見えるメッシュ）
+    // デフォルトは非表示。必要なら URL で ?grid=on、またはボタンで表示できます。
     const grid = new THREE.GridHelper(10, 20, 0x335577, 0x223344);
     grid.material.opacity = 0.25;
     grid.material.transparent = true;
+
+    const gridOn = (params.get('grid') || '').toLowerCase() === 'on';
+    grid.visible = gridOn;
+
     scene.add(grid);
 
-    // Lights（リッチ寄りの基本セット）
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.7);
-    const key = new THREE.DirectionalLight(0xffffff, 1.2);
-    key.position.set(6, 7, 4);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.5);
-    fill.position.set(-6, 3, -4);
-    const rim = new THREE.DirectionalLight(0xffffff, 0.35);
-    rim.position.set(0, 6, -8);
-    scene.add(hemi, key, fill, rim);
+    // Lights（スタジオ寄り：ブロックは白飛びさせない／床は少し持ち上げる）
+    const amb = new THREE.AmbientLight(0xffffff, 0.10);
+
+    // 半球ライト：下側を少し明るめにして床の“受け”を上げる
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xe9eef6, 0.62);
+
+    // メインライト（影を作る主役）
+    const key = new THREE.DirectionalLight(0xffffff, 1.10);
+    key.position.set(7, 10, 6);
+    key.castShadow = !shadowsOff;
+    // DirectionalLight のターゲットを明示（影の位置がブレにくい）
+    scene.add(key.target);
+
+    // フィル（影を潰しすぎない）
+    const fill = new THREE.DirectionalLight(0xffffff, 0.38);
+    fill.position.set(-6, 6, 6);
+
+    // リム（輪郭）
+    const rim = new THREE.DirectionalLight(0xffffff, 0.18);
+    rim.position.set(0, 8, -10);
+
+    // トップ（床の暗さ対策：薄く）
+    const top = new THREE.DirectionalLight(0xffffff, 0.14);
+    top.position.set(0, 14, 0);
+
+    // 影の品質設定（シャープ寄り）
+    // - mapSize を上げるほど輪郭が綺麗（重くなる）
+    // - PCFSoft の場合は radius で柔らかさを調整
+    if (!shadowsOff) {
+      const map = parseInt(params.get('shadowMap') || '4096', 10); // 例) ?shadowMap=2048
+      const mapSize = (isFinite(map) ? Math.max(512, Math.min(map, 4096)) : 4096);
+      key.shadow.mapSize.set(mapSize, mapSize);
+
+      key.shadow.bias = -0.00008;
+      key.shadow.normalBias = 0.02;
+
+      // 輪郭（シャープ時は 0、ソフト時は少しだけ）
+      key.shadow.radius = shadowSoft ? 2 : 0;
+      // カメラ範囲はモデル毎にframeSelectionで設定
+    }
+
+    scene.add(amb, hemi, key, fill, rim, top);
+
+    // 影受け（透明床）: 例) ?shadowCatcher=off で無効化
+    const shadowCatcherOff = (params.get('shadowCatcher') || '').toLowerCase() === 'off';
+    let shadowCatcher = null;
+
+    if (!shadowsOff && !shadowCatcherOff) {
+      // 影の濃さ：例) ?shadowOpacity=0.35
+      // デフォルトは「見える」濃さに寄せる（シャープ影は少し濃いめ）
+      const shadowOpacity = parseFloat(params.get('shadowOpacity') || (shadowSoft ? '0.24' : '0.36'));
+      const shadowMat = new THREE.ShadowMaterial({ opacity: (isFinite(shadowOpacity) ? shadowOpacity : (shadowSoft ? 0.24 : 0.36)) });
+      shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), shadowMat);
+      shadowCatcher.rotation.x = -Math.PI / 2;
+      shadowCatcher.position.set(0, 0, 0); // 後でモデルの底面に合わせて更新する
+      shadowCatcher.receiveShadow = true;
+      scene.add(shadowCatcher);
+    }
 
     // Environment（HDRが無ければRoomEnvironmentでそれっぽく）
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -199,6 +259,14 @@
       // Re-center around origin
       const offset = center.clone().multiplyScalar(-1);
       pivot.position.copy(offset);
+      // pivot移動後はワールド行列を更新してからBBoxを取る（これをしないと影受けがズレる）
+      pivot.updateWorldMatrix(true, true);
+
+      // リセンタ後のワールドBBox（影受け・影カメラ調整に使う）
+      // object単体ではなく pivot 全体から取ることで、親の移動（pivot.position）も確実に反映される
+      const worldBoxAfterCenter = new THREE.Box3().setFromObject(pivot, true);
+      const worldSize = worldBoxAfterCenter.getSize(new THREE.Vector3());
+      const worldCenter = worldBoxAfterCenter.getCenter(new THREE.Vector3());
 
       const target = new THREE.Vector3(0, 0, 0);
       controls.target.copy(target);
@@ -221,6 +289,38 @@
       // OrbitControls の内部状態を今のカメラに同期
       controls.target.copy(target);
       controls.update();
+
+      // 影受け（shadow catcher）を「モデルの底面」に合わせ、サイズもモデルに合わせる
+      if (shadowCatcher) {
+        const eps = 0.002;
+        shadowCatcher.position.set(worldCenter.x, worldBoxAfterCenter.min.y - eps, worldCenter.z);
+
+        // モデルの大きさ + 余白で影受けサイズを決める
+        const pad = 1.6;
+        const sx = Math.max(0.01, worldSize.x * pad);
+        const sz = Math.max(0.01, worldSize.z * pad);
+        shadowCatcher.scale.set(sx, sz, 1);
+      }
+
+      // 影のスケール/位置をモデルに合わせる（固定dだと縮尺がズレやすい）
+      if (!shadowsOff && key.castShadow) {
+        // 影カメラの範囲（モデルのXY/Zを覆う）
+        const half = Math.max(worldSize.x, worldSize.z) * 0.6; // 少し余白込み
+        key.shadow.camera.left = -half;
+        key.shadow.camera.right = half;
+        key.shadow.camera.top = half;
+        key.shadow.camera.bottom = -half;
+
+        // 影カメラのnear/far（モデル高さに応じて）
+        key.shadow.camera.near = 0.1;
+        key.shadow.camera.far = Math.max(10, worldSize.y * 6 + 50);
+
+        // ターゲットをモデル中心へ（影の位置が安定）
+        key.target.position.copy(worldCenter);
+
+        key.shadow.camera.updateProjectionMatrix();
+        key.shadow.needsUpdate = true;
+      }
 
       // イントロ用に球面座標も返す（OrbitControls と同じ概念）
       const spherical = new THREE.Spherical().setFromVector3(offsetVec);
@@ -305,12 +405,40 @@
         const root = await objLoader.loadAsync(objAbs);
 
         // PBR寄りに寄せる（見た目安定）
+        // 目的：ブロックは明るすぎない／床（暗色）は少しだけ持ち上げる
+        const envInt = parseFloat(params.get('envIntensity') || '0.75'); // 反射強さ（強すぎると白飛び）
+        const floorBoost = parseFloat(params.get('floorBoost') || '3.0'); // 暗色だけ明るく
+
+        function luminance(color) {
+          // ざっくり輝度（近似）
+          return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+        }
+
         root.traverse((n) => {
           if (n.isMesh) {
             const c = n.material?.color ? n.material.color.clone() : new THREE.Color(0xdddddd);
-            const std = new THREE.MeshStandardMaterial({ color: c, metalness: 0.1, roughness: 0.85 });
-            std.envMapIntensity = 1.0;
+
+            // LEGOっぽい質感：白飛びしにくい設定
+            const std = new THREE.MeshStandardMaterial({
+              color: c,
+              metalness: 0.03,
+              roughness: 0.8
+            });
+
+            std.envMapIntensity = (isFinite(envInt) ? envInt : 0.75);
+
+            // 暗い色（床など）だけ少しだけ明るくする
+            const lum = luminance(std.color);
+            if (isFinite(floorBoost) && floorBoost !== 1.0 && lum < 0.24) {
+              std.color.multiplyScalar(floorBoost);
+            }
+
             n.material = std;
+
+            // 影
+            n.castShadow = !shadowsOff;
+            n.receiveShadow = !shadowsOff;
+
             if (n.geometry && !n.geometry.attributes.normal) n.geometry.computeVertexNormals();
           }
         });
@@ -344,6 +472,9 @@
     const gridBtn = document.getElementById('gridBtn');
     const bgBtn = document.getElementById('bgBtn');
 
+    // 初期状態を反映
+    gridBtn.setAttribute('aria-pressed', String(grid.visible));
+
     autorotateBtn.addEventListener('click', () => {
       autoRotate = !autoRotate;
       autorotateBtn.setAttribute('aria-pressed', String(autoRotate));
@@ -355,9 +486,8 @@
     });
 
     gridBtn.addEventListener('click', () => {
-      const active = gridBtn.getAttribute('aria-pressed') !== 'true';
-      gridBtn.setAttribute('aria-pressed', String(active));
-      grid.visible = active;
+      grid.visible = !grid.visible;
+      gridBtn.setAttribute('aria-pressed', String(grid.visible));
     });
 
     bgBtn.addEventListener('click', () => {
