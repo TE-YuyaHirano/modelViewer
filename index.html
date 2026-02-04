@@ -441,6 +441,124 @@
           const srcMat = src || {};
           const baseColor = srcMat.color ? srcMat.color.clone() : new THREE.Color(0xdddddd);
 
+          // --- Debug / overrides ---
+          const debugOn = (params.get('debugColor') || '').toLowerCase() === 'on';
+          const debugMat = (params.get('debugMat') || '').trim(); // 例) ?debugMat=MB_21 でそのマテリアルだけログ
+          const debugThis = debugOn && (!debugMat || srcMat.name === debugMat);
+
+          // マテリアル名で red/pink 判定を強制したい場合（カンマ区切り）
+          // 例) ?pinkMats=MB_21,MB_999&redMats=MB_353
+          const parseList = (s) => (s || '').split(',').map(v => v.trim()).filter(Boolean);
+          const forcedPink = new Set(parseList(params.get('pinkMats')));
+          const forcedRed  = new Set(parseList(params.get('redMats')));
+          const forced = forcedPink.has(srcMat.name) ? 'pink' : (forcedRed.has(srcMat.name) ? 'red' : '');
+
+          // 単色マテリアル（テクスチャ無し）だけ色味を微調整して、赤とピンクを見分けやすくする。
+          // - デフォルトON（必要なら ?colorTune=off で無効化）
+          // - 調整値はURLで上書き可能
+          //    例) ?pinkSat=0.80&pinkLight=1.06&pinkHue=0.02&redSat=0.98  |  判定調整: satMin=0.18&redHueDist=0.06&pinkHueMin=0.83&pinkHueMax=0.97&pinkLightAlt=0.62  |  debugColor=on&debugMat=MB_21
+          //    強制: ?pinkMats=MB_21,MB_999&redMats=MB_353
+          const colorTuneOff = (params.get('colorTune') || '').toLowerCase() === 'off';
+          const hasMap = !!srcMat.map;
+          let tuned = false;
+          if (!colorTuneOff && !hasMap) {
+            // 重要: 判定・調整を linear の HSL でやると不安定になりやすいので、sRGB 空間で行う
+            const cSRGB = baseColor.clone().convertLinearToSRGB();
+
+            // 判定用（変更前）HSL
+            const hsl0 = { h: 0, s: 0, l: 0 };
+            cSRGB.getHSL(hsl0);
+
+            // 変更用HSL
+            const hsl = { h: hsl0.h, s: hsl0.s, l: hsl0.l };
+
+            // デフォルト値（Sketchfabっぽく：ピンクは薄め＆少し明るめ）
+            const redSat    = parseFloat(params.get('redSat')    || '0.99');
+            const pinkSat   = parseFloat(params.get('pinkSat')   || '0.86');
+            const pinkLight = parseFloat(params.get('pinkLight') || '1.04');
+            const pinkHue   = parseFloat(params.get('pinkHue')   || '0.015');
+
+            const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+            // 判定パラメータ（URLで調整可能）
+            // 例) &satMin=0.18&redHueDist=0.06&pinkHueMin=0.83&pinkLightAlt=0.62
+            const satMin       = parseFloat(params.get('satMin')       || '0.18');
+            const redHueDist   = parseFloat(params.get('redHueDist')   || '0.06');
+            const pinkHueMin   = parseFloat(params.get('pinkHueMin')   || '0.83');
+            const pinkHueMax   = parseFloat(params.get('pinkHueMax')   || '0.97'); // ★追加：赤ラップ(1.0付近)を除外
+            const pinkLightAlt = parseFloat(params.get('pinkLightAlt') || '0.62');
+
+            // Hueは0/1でラップするので距離で判定（0=赤）
+            const hueDistToRed = Math.min(hsl0.h, 1.0 - hsl0.h);
+            const nearRed = hueDistToRed <= redHueDist;
+            const nearMagenta = (hsl0.h >= pinkHueMin && hsl0.h <= pinkHueMax); // 0.83〜0.97
+            const satOk = hsl0.s >= satMin;
+
+            // 自動判定
+            const isPinkAuto = satOk && (nearMagenta || (nearRed && hsl0.l >= pinkLightAlt));
+            const isRedAuto  = satOk && nearRed && !isPinkAuto;
+
+            // 強制指定があれば優先（モデル側で「ピンク面に赤マテリアル名が割り当てられている」ケースの対策）
+            const isPink = (forced === 'pink') ? true : (forced === 'red') ? false : isPinkAuto;
+            const isRed  = (forced === 'red')  ? true : (forced === 'pink') ? false : isRedAuto;
+
+            // ピンク判定を優先
+            if (isPink) {
+              tuned = true;
+              if (isFinite(pinkSat) && pinkSat !== 1.0) hsl.s = clamp01(hsl.s * pinkSat);
+              if (isFinite(pinkLight) && pinkLight !== 1.0) hsl.l = clamp01(hsl.l * pinkLight);
+              if (isFinite(pinkHue) && pinkHue !== 0.0) hsl.h = (hsl.h + pinkHue) % 1.0;
+            } else if (isRed) {
+              tuned = true;
+              if (isFinite(redSat) && redSat !== 1.0) hsl.s = clamp01(hsl.s * redSat);
+            }
+
+            // sRGBでHSLを適用 → linear に戻す
+            cSRGB.setHSL(hsl.h, hsl.s, hsl.l);
+            cSRGB.convertSRGBToLinear();
+            baseColor.copy(cSRGB);
+
+            // デバッグ: ?debugColor=on（必要なら ?debugMat=MB_21 で対象を絞る）
+            // Console上で展開しなくてもコピペできるよう、1行JSONも出す
+            if (debugThis) {
+              const c0 = baseColor.clone().convertLinearToSRGB();
+              const dbg = {
+                mat: srcMat.name || '(no-name)',
+                forced,              // 'pink' | 'red' | ''
+                hasMap,              // テクスチャありなら tune 対象外
+                tuned,               // 実際に調整を適用したか
+                rgb_srgb: { r: +c0.r.toFixed(4), g: +c0.g.toFixed(4), b: +c0.b.toFixed(4) },
+                hsl0: { h: +hsl0.h.toFixed(4), s: +hsl0.s.toFixed(4), l: +hsl0.l.toFixed(4) },
+                isRed,
+                isPink,
+                satMin,
+                redHueDist,
+                pinkHueMin,
+                pinkHueMax,
+                pinkLightAlt,
+                params: {
+                  redSat: +redSat.toFixed(4),
+                  pinkSat: +pinkSat.toFixed(4),
+                  pinkLight: +pinkLight.toFixed(4),
+                  pinkHue: +pinkHue.toFixed(4)
+                }
+              };
+              console.log('colorTune', dbg);
+              console.log('colorTuneJSON', JSON.stringify(dbg));
+            }
+          }
+
+          // 追加の全体彩度調整（単色のみ・任意）
+          // 例) ?sat=0.95（全体を少し落とす） / 指定しなければ無効
+          if (params.has('sat') && !srcMat.map) {
+            const sat = parseFloat(params.get('sat') || '1.0');
+            if (isFinite(sat) && sat !== 1.0) {
+              const hsl = {};
+              baseColor.getHSL(hsl);
+              baseColor.setHSL(hsl.h, Math.max(0, Math.min(1, hsl.s * sat)), hsl.l);
+            }
+          }
+
           const std = new THREE.MeshStandardMaterial({
             color: baseColor,
             metalness: 0.03,
@@ -615,7 +733,7 @@
     }
     requestAnimationFrame(tick);
 
-    console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  intro=off');
+    console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  sat=0.95（単色の全体彩度・任意） |  intro=off');
   </script>
 
   <!--
