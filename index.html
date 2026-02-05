@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>3Dモデル ビューア（OBJ / Three.js / スマホ対応）</title>
-  <meta name="description" content="three.jsでOBJをスマホでぐりぐり回せる軽量ビューア。ファイルパス（URLパラメータ）でモデルを指定。" />
+  <title>from Kid A</title>
+  <meta name="description" content="modelViewer" />
   <style>
     :root { --bg:#0b0f14; --panel:rgba(20,24,31,.75); --text:#e8eef7; --muted:#9fb2c7; --accent:#7cc4ff; }
     html,body { height:100%; margin:0; background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
@@ -456,7 +456,7 @@
           // 単色マテリアル（テクスチャ無し）だけ色味を微調整して、赤とピンクを見分けやすくする。
           // - デフォルトON（必要なら ?colorTune=off で無効化）
           // - 調整値はURLで上書き可能
-          //    例) ?pinkSat=0.80&pinkLight=1.06&pinkHue=0.02&redSat=0.98  |  判定調整: satMin=0.18&redHueDist=0.06&pinkHueMin=0.83&pinkHueMax=0.97&pinkLightAlt=0.62  |  debugColor=on&debugMat=MB_21
+          //    例) ?pinkSat=0.80&pinkLight=1.06&pinkHue=0.02&redSat=0.98&swapSat=on  |  判定調整: satMin=0.18&redHueDist=0.06&pinkHueMin=0.83&pinkHueMax=0.97  |  (明るい赤をピンク扱いにするなら pinkAlt=on&pinkLightAlt=0.70)  |  debugColor=on&debugMat=MB_21
           //    強制: ?pinkMats=MB_21,MB_999&redMats=MB_353
           const colorTuneOff = (params.get('colorTune') || '').toLowerCase() === 'off';
           const hasMap = !!srcMat.map;
@@ -473,10 +473,19 @@
             const hsl = { h: hsl0.h, s: hsl0.s, l: hsl0.l };
 
             // デフォルト値（Sketchfabっぽく：ピンクは薄め＆少し明るめ）
-            const redSat    = parseFloat(params.get('redSat')    || '0.99');
-            const pinkSat   = parseFloat(params.get('pinkSat')   || '0.86');
+            let redSat    = parseFloat(params.get('redSat')    || '0.99');
+            let pinkSat   = parseFloat(params.get('pinkSat')   || '0.86');
             const pinkLight = parseFloat(params.get('pinkLight') || '1.04');
             const pinkHue   = parseFloat(params.get('pinkHue')   || '0.015');
+
+            // 一部モデルで「分類（isRed/isPink）」と、ユーザーが期待する“赤ブロック/ピンクブロック”が逆になる場合に
+            // 影響パラメータだけ入れ替える。例) &swapSat=on
+            const swapSat = (params.get('swapSat') || '').toLowerCase() === 'on';
+            if (swapSat) {
+              const tmp = redSat;
+              redSat = pinkSat;
+              pinkSat = tmp;
+            }
 
             const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
@@ -487,6 +496,9 @@
             const pinkHueMin   = parseFloat(params.get('pinkHueMin')   || '0.83');
             const pinkHueMax   = parseFloat(params.get('pinkHueMax')   || '0.97'); // ★追加：赤ラップ(1.0付近)を除外
             const pinkLightAlt = parseFloat(params.get('pinkLightAlt') || '0.62');
+            // nearRed をピンク扱いにする“救済”を使うか（明るい赤系をピンクに寄せたい時だけON）
+            // 例) &pinkAlt=on&pinkLightAlt=0.70
+            const pinkAltOn = (params.get('pinkAlt') || '').toLowerCase() === 'on';
 
             // Hueは0/1でラップするので距離で判定（0=赤）
             const hueDistToRed = Math.min(hsl0.h, 1.0 - hsl0.h);
@@ -495,7 +507,7 @@
             const satOk = hsl0.s >= satMin;
 
             // 自動判定
-            const isPinkAuto = satOk && (nearMagenta || (nearRed && hsl0.l >= pinkLightAlt));
+            const isPinkAuto = satOk && (nearMagenta || (pinkAltOn && nearRed && hsl0.l >= pinkLightAlt));
             const isRedAuto  = satOk && nearRed && !isPinkAuto;
 
             // 強制指定があれば優先（モデル側で「ピンク面に赤マテリアル名が割り当てられている」ケースの対策）
@@ -536,7 +548,9 @@
                 pinkHueMin,
                 pinkHueMax,
                 pinkLightAlt,
+                pinkAltOn,
                 params: {
+                  swapSat,
                   redSat: +redSat.toFixed(4),
                   pinkSat: +pinkSat.toFixed(4),
                   pinkLight: +pinkLight.toFixed(4),
@@ -557,6 +571,300 @@
               baseColor.getHSL(hsl);
               baseColor.setHSL(hsl.h, Math.max(0, Math.min(1, hsl.s * sat)), hsl.l);
             }
+          }
+
+          // 追加の色グループ調整（他の色でも同じ仕組みで調整できるように）
+          // 目的：
+          //  - 床面の深緑を少し明るく（沈みを軽減）
+          //  - 一部のグレー部材を少し薄めのグレーに
+          // 方針：テクスチャ無し（単色）に限り、sRGBのHSLで判定して補正。
+          // さらに「マテリアル名の強制リスト」も用意（最終手段）。
+          //
+          // 使い方（例）
+          //  - 緑床を少し持ち上げ:  &greenLift=1.25
+          //  - グレーを少し明るく:  &grayLift=1.18&graySat=0.92
+          //  - 判定をマテリアル名で強制: &greenMats=MB_37&grayMats=MB_12,MB_99
+          if (!srcMat.map) {
+            // sRGBで判定・補正
+            const cSRGB2 = baseColor.clone().convertLinearToSRGB();
+            const hsl2 = { h: 0, s: 0, l: 0 };
+            cSRGB2.getHSL(hsl2);
+
+            const clamp01 = (v) => Math.max(0, Math.min(1, v));
+            const parseList2 = (s) => (s || '').split(',').map(v => v.trim()).filter(Boolean);
+            const forcedGreen  = new Set(parseList2(params.get('greenMats')));
+            const forcedGray   = new Set(parseList2(params.get('grayMats')));
+            const forcedBrown  = new Set(parseList2(params.get('brownMats')));
+            const forcedYellow = new Set(parseList2(params.get('yellowMats')));
+            const forcedBlue   = new Set(parseList2(params.get('blueMats')));
+            const forcedCyan   = new Set(parseList2(params.get('cyanMats')));
+            const forcedOrange = new Set(parseList2(params.get('orangeMats')));
+            const matName = (srcMat.name || '').trim();
+
+            // --- Debug helpers for group detection ---
+            const debugOn2 = (params.get('debugColor') || '').toLowerCase() === 'on';
+            const debugMat2 = (params.get('debugMat') || '').trim();
+            const debugThis2 = debugOn2 && (!debugMat2 || matName === debugMat2);
+
+            // ---- Green (dark green floor) ----
+            // デフォルトは無効（1.0）
+            const greenLift = parseFloat(params.get('greenLift') || '1.0');
+            const greenSat  = parseFloat(params.get('greenSat')  || '1.0');
+            const greenHueMin = parseFloat(params.get('greenHueMin') || '0.25'); // だいたい緑
+            const greenHueMax = parseFloat(params.get('greenHueMax') || '0.45');
+            const greenSatMin = parseFloat(params.get('greenSatMin') || '0.25');
+            const greenLumMax = parseFloat(params.get('greenLumMax') || '0.38'); // 暗めだけ対象
+
+            const isGreenForced = matName && forcedGreen.has(matName);
+            const isGreenAuto = (hsl2.h >= greenHueMin && hsl2.h <= greenHueMax) && (hsl2.s >= greenSatMin) && (hsl2.l <= greenLumMax);
+            const isGreen = isGreenForced || isGreenAuto;
+
+            if (isGreen && isFinite(greenLift) && greenLift !== 1.0) {
+              hsl2.l = clamp01(hsl2.l * greenLift);
+              if (isFinite(greenSat) && greenSat !== 1.0) hsl2.s = clamp01(hsl2.s * greenSat);
+            }
+
+            // ---- Brown (dark brown floor) ----
+            // デフォルトは無効（1.0）
+            // 例) &brownLift=1.22&brownSat=1.08
+            const brownLift = parseFloat(params.get('brownLift') || '1.0');
+            const brownSat  = parseFloat(params.get('brownSat')  || '1.0');
+            const brownHueMin = parseFloat(params.get('brownHueMin') || '0.03');
+            const brownHueMax = parseFloat(params.get('brownHueMax') || '0.13');
+            const brownSatMin = parseFloat(params.get('brownSatMin') || '0.22');
+            const brownLumMax = parseFloat(params.get('brownLumMax') || '0.42'); // 暗めだけ対象
+
+            const isBrownForced = matName && forcedBrown.has(matName);
+            const isBrownAuto = (hsl2.h >= brownHueMin && hsl2.h <= brownHueMax) && (hsl2.s >= brownSatMin) && (hsl2.l <= brownLumMax);
+            const isBrown = isBrownForced || isBrownAuto;
+
+            if (isBrown && isFinite(brownLift) && brownLift !== 1.0) {
+              hsl2.l = clamp01(hsl2.l * brownLift);
+              if (isFinite(brownSat) && brownSat !== 1.0) hsl2.s = clamp01(hsl2.s * brownSat);
+            }
+
+            // ---- Yellow (minifig face / yellow parts) ----
+            // 目的：赤っぽく転んだ黄色を、より黄色らしく（赤みを減らす）
+            // デフォルトは無効（1.0 / 0.0）
+            // 例) &yellowLift=1.05&yellowSat=1.02&yellowHue=0.02
+            const yellowLift = parseFloat(params.get('yellowLift') || '1.0');
+            const yellowSat  = parseFloat(params.get('yellowSat')  || '1.0');
+            const yellowHue  = parseFloat(params.get('yellowHue')  || '0.0'); // +で黄方向(緑寄り)へ、-で赤寄りへ
+
+            // 自動判定の範囲（URLで調整可）
+            // Hueは0..1で、黄はだいたい 0.06〜0.20 付近。
+            // ※このモデルでは h=0.075 前後が黄パーツとして出ていたので、下限を少し広げる
+            const yellowHueMin = parseFloat(params.get('yellowHueMin') || '0.06');
+            const yellowHueMax = parseFloat(params.get('yellowHueMax') || '0.20');
+            const yellowSatMin = parseFloat(params.get('yellowSatMin') || '0.12');
+            const yellowLumMin = parseFloat(params.get('yellowLumMin') || '0.12');
+            const yellowLumMax = parseFloat(params.get('yellowLumMax') || '0.92');
+
+            // Hueだけだと判定漏れすることがあるので、RGBの“黄っぽさ”も併用（保険）
+            // - 赤と緑が強く、青が弱い（=黄〜橙に見える）
+            const rgbYellowish = (cSRGB2.r >= 0.45 && cSRGB2.g >= 0.25 && cSRGB2.b <= 0.20);
+
+            const isYellowForced = matName && forcedYellow.has(matName);
+            const isYellowAuto = (
+              ((hsl2.h >= yellowHueMin && hsl2.h <= yellowHueMax) || rgbYellowish)
+              && (hsl2.s >= yellowSatMin)
+              && (hsl2.l >= yellowLumMin && hsl2.l <= yellowLumMax)
+            );
+            const isYellow = isYellowForced || isYellowAuto;
+
+            // --- Debug log for yellow detection ---
+            if (debugThis2) {
+              console.log('groupDetect', {
+                mat: matName,
+                hsl_srgb: { h: +hsl2.h.toFixed(4), s: +hsl2.s.toFixed(4), l: +hsl2.l.toFixed(4) },
+                rgb_srgb: { r: +cSRGB2.r.toFixed(4), g: +cSRGB2.g.toFixed(4), b: +cSRGB2.b.toFixed(4) },
+                isYellow,
+                isYellowForced,
+                rgbYellowish,
+                yellowHueMin,
+                yellowHueMax,
+                yellowSatMin,
+                yellowLumMin,
+                yellowLumMax
+              });
+            }
+
+            if (isYellow) {
+              if (isFinite(yellowHue) && yellowHue !== 0.0) hsl2.h = (hsl2.h + yellowHue + 1.0) % 1.0;
+              if (isFinite(yellowLift) && yellowLift !== 1.0) hsl2.l = clamp01(hsl2.l * yellowLift);
+              if (isFinite(yellowSat) && yellowSat !== 1.0) hsl2.s = clamp01(hsl2.s * yellowSat);
+            }
+
+            // ---- Orange (orange parts) ----
+            // 目的：オレンジの彩度/明るさ/色相を個別に調整
+            // NOTE: 黄や茶と色域が近く誤爆しやすいので、
+            //  - デフォルトでは「黄/茶に該当するもの」はオレンジ判定から除外
+            //  - 暗すぎる(床の茶) / 明るすぎる(黄) は除外
+            //  - Hueレンジだけで漏れる場合に備えてRGBの“オレンジっぽさ”も併用
+            //
+            // 例) &orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005
+            // 例) 判定調整: &orangeHueMin=0.02&orangeHueMax=0.07&orangeSatMin=0.22&orangeLumMin=0.18&orangeLumMax=0.85
+            const orangeLift = parseFloat(params.get('orangeLift') || '1.0');
+            const orangeSat  = parseFloat(params.get('orangeSat')  || '1.0');
+            const orangeHue  = parseFloat(params.get('orangeHue')  || '0.0'); // +で黄寄り、-で赤寄り
+
+            // 黄(h≈0.075)と茶(h≈0.05, 暗い)の間に入りやすいので、デフォルトを少し狭める
+            const orangeHueMin = parseFloat(params.get('orangeHueMin') || '0.02');
+            const orangeHueMax = parseFloat(params.get('orangeHueMax') || '0.07');
+            const orangeSatMin = parseFloat(params.get('orangeSatMin') || '0.22');
+            // 暗い茶床を除外するために下限を上げ、黄の白飛び側も除外
+            const orangeLumMin = parseFloat(params.get('orangeLumMin') || '0.18');
+            const orangeLumMax = parseFloat(params.get('orangeLumMax') || '0.85');
+
+            // Hueだけだと判定漏れすることがあるのでRGBの保険
+            // - Rが強く、Gが中程度、Bが弱い（黄はGが強すぎる/明るすぎることが多い）
+            const rgbOrangish = (
+              cSRGB2.r >= 0.55 &&
+              cSRGB2.g >= 0.18 && cSRGB2.g <= 0.55 &&
+              cSRGB2.b <= 0.18 &&
+              cSRGB2.r >= cSRGB2.g * 1.05
+            );
+
+            const isOrangeForced = matName && forcedOrange.has(matName);
+            const isOrangeAuto = (
+              // 強制でない場合は黄/茶を優先して除外（誤爆防止）
+              !isYellow && !isBrown &&
+              // Hueレンジ or RGB保険
+              ((hsl2.h >= orangeHueMin && hsl2.h <= orangeHueMax) || rgbOrangish) &&
+              (hsl2.s >= orangeSatMin) &&
+              (hsl2.l >= orangeLumMin && hsl2.l <= orangeLumMax)
+            );
+            const isOrange = isOrangeForced || isOrangeAuto;
+
+            if (debugThis2) {
+              console.log('groupDetect_orange', {
+                mat: matName,
+                hsl_srgb: { h: +hsl2.h.toFixed(4), s: +hsl2.s.toFixed(4), l: +hsl2.l.toFixed(4) },
+                rgb_srgb: { r: +cSRGB2.r.toFixed(4), g: +cSRGB2.g.toFixed(4), b: +cSRGB2.b.toFixed(4) },
+                isOrange,
+                isOrangeForced,
+                isYellow,
+                isBrown,
+                rgbOrangish,
+                orangeHueMin,
+                orangeHueMax,
+                orangeSatMin,
+                orangeLumMin,
+                orangeLumMax
+              });
+            }
+
+            if (isOrange) {
+              if (isFinite(orangeHue) && orangeHue !== 0.0) hsl2.h = (hsl2.h + orangeHue + 1.0) % 1.0;
+              if (isFinite(orangeLift) && orangeLift !== 1.0) hsl2.l = clamp01(hsl2.l * orangeLift);
+              if (isFinite(orangeSat) && orangeSat !== 1.0) hsl2.s = clamp01(hsl2.s * orangeSat);
+            }
+
+            // ---- Cyan / Light blue (cyan parts) ----
+            // 目的：水色（シアン）を個別に調整
+            // 例) &cyanLift=1.05&cyanSat=0.98&cyanHue=0.0
+            const cyanLift = parseFloat(params.get('cyanLift') || '1.0');
+            const cyanSat  = parseFloat(params.get('cyanSat')  || '1.0');
+            const cyanHue  = parseFloat(params.get('cyanHue')  || '0.0');
+
+            const cyanHueMin = parseFloat(params.get('cyanHueMin') || '0.46');
+            const cyanHueMax = parseFloat(params.get('cyanHueMax') || '0.58');
+            const cyanSatMin = parseFloat(params.get('cyanSatMin') || '0.18');
+            const cyanLumMin = parseFloat(params.get('cyanLumMin') || '0.08');
+            const cyanLumMax = parseFloat(params.get('cyanLumMax') || '0.95');
+
+            const isCyanForced = matName && forcedCyan.has(matName);
+            const isCyanAuto = (
+              (hsl2.h >= cyanHueMin && hsl2.h <= cyanHueMax)
+              && (hsl2.s >= cyanSatMin)
+              && (hsl2.l >= cyanLumMin && hsl2.l <= cyanLumMax)
+            );
+            const isCyan = isCyanForced || isCyanAuto;
+
+            if (debugThis2) {
+              console.log('groupDetect_cyan', {
+                mat: matName,
+                hsl_srgb: { h: +hsl2.h.toFixed(4), s: +hsl2.s.toFixed(4), l: +hsl2.l.toFixed(4) },
+                rgb_srgb: { r: +cSRGB2.r.toFixed(4), g: +cSRGB2.g.toFixed(4), b: +cSRGB2.b.toFixed(4) },
+                isCyan,
+                isCyanForced,
+                cyanHueMin,
+                cyanHueMax,
+                cyanSatMin,
+                cyanLumMin,
+                cyanLumMax
+              });
+            }
+
+            if (isCyan) {
+              if (isFinite(cyanHue) && cyanHue !== 0.0) hsl2.h = (hsl2.h + cyanHue + 1.0) % 1.0;
+              if (isFinite(cyanLift) && cyanLift !== 1.0) hsl2.l = clamp01(hsl2.l * cyanLift);
+              if (isFinite(cyanSat) && cyanSat !== 1.0) hsl2.s = clamp01(hsl2.s * cyanSat);
+            }
+
+            // ---- Blue (blue parts) ----
+            // 目的：青を個別に調整
+            // 例) &blueLift=1.04&blueSat=0.98&blueHue=0.0
+            const blueLift = parseFloat(params.get('blueLift') || '1.0');
+            const blueSat  = parseFloat(params.get('blueSat')  || '1.0');
+            const blueHue  = parseFloat(params.get('blueHue')  || '0.0');
+
+            const blueHueMin = parseFloat(params.get('blueHueMin') || '0.58');
+            const blueHueMax = parseFloat(params.get('blueHueMax') || '0.72');
+            const blueSatMin = parseFloat(params.get('blueSatMin') || '0.18');
+            const blueLumMin = parseFloat(params.get('blueLumMin') || '0.06');
+            const blueLumMax = parseFloat(params.get('blueLumMax') || '0.95');
+
+            const isBlueForced = matName && forcedBlue.has(matName);
+            const isBlueAuto = (
+              (hsl2.h >= blueHueMin && hsl2.h <= blueHueMax)
+              && (hsl2.s >= blueSatMin)
+              && (hsl2.l >= blueLumMin && hsl2.l <= blueLumMax)
+            );
+            const isBlue = isBlueForced || isBlueAuto;
+
+            if (debugThis2) {
+              console.log('groupDetect_blue', {
+                mat: matName,
+                hsl_srgb: { h: +hsl2.h.toFixed(4), s: +hsl2.s.toFixed(4), l: +hsl2.l.toFixed(4) },
+                rgb_srgb: { r: +cSRGB2.r.toFixed(4), g: +cSRGB2.g.toFixed(4), b: +cSRGB2.b.toFixed(4) },
+                isBlue,
+                isBlueForced,
+                blueHueMin,
+                blueHueMax,
+                blueSatMin,
+                blueLumMin,
+                blueLumMax
+              });
+            }
+
+            if (isBlue) {
+              if (isFinite(blueHue) && blueHue !== 0.0) hsl2.h = (hsl2.h + blueHue + 1.0) % 1.0;
+              if (isFinite(blueLift) && blueLift !== 1.0) hsl2.l = clamp01(hsl2.l * blueLift);
+              if (isFinite(blueSat) && blueSat !== 1.0) hsl2.s = clamp01(hsl2.s * blueSat);
+            }
+
+            // ---- Gray (low-saturation parts) ----
+            // デフォルトは無効（1.0）
+            const grayLift = parseFloat(params.get('grayLift') || '1.0');
+            const graySat  = parseFloat(params.get('graySat')  || '1.0');
+            const graySatMax = parseFloat(params.get('graySatMax') || '0.14');
+            const grayLumMin = parseFloat(params.get('grayLumMin') || '0.06');
+            const grayLumMax = parseFloat(params.get('grayLumMax') || '0.65');
+
+            const isGrayForced = matName && forcedGray.has(matName);
+            const isGrayAuto = (hsl2.s <= graySatMax) && (hsl2.l >= grayLumMin) && (hsl2.l <= grayLumMax);
+            const isGray = isGrayForced || isGrayAuto;
+
+            if (isGray && isFinite(grayLift) && grayLift !== 1.0) {
+              hsl2.l = clamp01(hsl2.l * grayLift);
+              if (isFinite(graySat) && graySat !== 1.0) hsl2.s = clamp01(hsl2.s * graySat);
+            }
+
+            // 反映（sRGB→linearへ戻す）
+            cSRGB2.setHSL(hsl2.h, hsl2.s, hsl2.l);
+            cSRGB2.convertSRGBToLinear();
+            baseColor.copy(cSRGB2);
           }
 
           const std = new THREE.MeshStandardMaterial({
@@ -733,7 +1041,7 @@
     }
     requestAnimationFrame(tick);
 
-    console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  sat=0.95（単色の全体彩度・任意） |  intro=off');
+console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  swapSat=on（redSat/pinkSat入替） |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  pinkAlt=on（明るい赤→ピンク救済） |  sat=0.95（単色の全体彩度・任意） |  greenLift=1.25（深緑を明るく） |  grayLift=1.18&graySat=0.92（グレーを明るく） |  greenMats=MB_37 / grayMats=MB_12,MB_99（マテ名で強制） |  brownLift=1.22&brownSat=1.08（茶床を明るく） |  brownMats=MB_12（茶床をマテ名で強制） |  yellowLift=1.05&yellowSat=1.02&yellowHue=0.02（黄パーツを黄寄りに） |  yellowMats=MB_12（黄をマテ名で強制） |  blueLift=1.04&blueSat=0.98&blueHue=0.0（青調整） |  cyanLift=1.05&cyanSat=0.98&cyanHue=0.0（水色調整） |  orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005（オレンジ調整） |  blueMats=MB_12 / cyanMats=MB_34 / orangeMats=MB_56（マテ名で強制） |  intro=off');
   </script>
 
   <!--
