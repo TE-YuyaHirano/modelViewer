@@ -66,8 +66,10 @@
     // URL params
     const params = new URLSearchParams(location.search);
 
-    // UI非表示（純ビューア）: ?ui=off
-    const uiOff = (params.get('ui') || '').toLowerCase() === 'off';
+    // UI表示/非表示
+    // デフォルトは UI=off（純ビューア）。UIを表示したい場合だけ ?ui=on を付ける
+    const uiOn = (params.get('ui') || '').toLowerCase() === 'on';
+    const uiOff = !uiOn;
     if (uiOff) {
       toolbar.style.display = 'none';
       brand.style.display = 'none';
@@ -455,8 +457,10 @@
           // マテリアル名で red/pink 判定を強制したい場合（カンマ区切り）
           // 例) ?pinkMats=MB_21,MB_999&redMats=MB_353
           const parseList = (s) => (s || '').split(',').map(v => v.trim()).filter(Boolean);
-          const forcedPink = new Set(parseList(params.get('pinkMats')));
-          const forcedRed  = new Set(parseList(params.get('redMats')));
+          // const forcedPink = new Set(parseList(params.get('pinkMats')));
+          // const forcedRed  = new Set(parseList(params.get('redMats')));
+          const forcedPink = new Set(parseList(params.get('pinkMats') || 'MB_353'));
+          const forcedRed  = new Set(parseList(params.get('redMats')  || 'MB_21'));
           const forced = forcedPink.has(srcMat.name) ? 'pink' : (forcedRed.has(srcMat.name) ? 'red' : '');
 
           // 単色マテリアル（テクスチャ無し）だけ色味を微調整して、赤とピンクを見分けやすくする。
@@ -479,8 +483,8 @@
             const hsl = { h: hsl0.h, s: hsl0.s, l: hsl0.l };
 
             // デフォルト値（Sketchfabっぽく：ピンクは薄め＆少し明るめ）
-            let redSat    = parseFloat(params.get('redSat')    || '0.99');
-            let pinkSat   = parseFloat(params.get('pinkSat')   || '0.86');
+            let redSat    = parseFloat(params.get('redSat')    || '0.9');
+            let pinkSat   = parseFloat(params.get('pinkSat')   || '0.4');
             const pinkLight = parseFloat(params.get('pinkLight') || '1.04');
             const pinkHue   = parseFloat(params.get('pinkHue')   || '0.015');
 
@@ -614,7 +618,7 @@
 
             // ---- Green (dark green floor) ----
             // デフォルトは無効（1.0）
-            const greenLift = parseFloat(params.get('greenLift') || '1.0');
+            const greenLift = parseFloat(params.get('greenLift') || '3.5');
             const greenSat  = parseFloat(params.get('greenSat')  || '1.0');
             const greenHueMin = parseFloat(params.get('greenHueMin') || '0.25'); // だいたい緑
             const greenHueMax = parseFloat(params.get('greenHueMax') || '0.45');
@@ -633,8 +637,8 @@
             // ---- Brown (dark brown floor) ----
             // デフォルトは無効（1.0）
             // 例) &brownLift=1.22&brownSat=1.08
-            const brownLift = parseFloat(params.get('brownLift') || '1.0');
-            const brownSat  = parseFloat(params.get('brownSat')  || '1.0');
+            const brownLift = parseFloat(params.get('brownLift') || '2.0');
+            const brownSat  = parseFloat(params.get('brownSat')  || '1.5');
             const brownHueMin = parseFloat(params.get('brownHueMin') || '0.03');
             const brownHueMax = parseFloat(params.get('brownHueMax') || '0.13');
             const brownSatMin = parseFloat(params.get('brownSatMin') || '0.22');
@@ -653,9 +657,9 @@
             // 目的：赤っぽく転んだ黄色を、より黄色らしく（赤みを減らす）
             // デフォルトは無効（1.0 / 0.0）
             // 例) &yellowLift=1.05&yellowSat=1.02&yellowHue=0.02
-            const yellowLift = parseFloat(params.get('yellowLift') || '1.0');
-            const yellowSat  = parseFloat(params.get('yellowSat')  || '1.0');
-            const yellowHue  = parseFloat(params.get('yellowHue')  || '0.0'); // +で黄方向(緑寄り)へ、-で赤寄りへ
+            const yellowLift = parseFloat(params.get('yellowLift') || '1.1');
+            const yellowSat  = parseFloat(params.get('yellowSat')  || '0.7');
+            const yellowHue  = parseFloat(params.get('yellowHue')  || '0.02'); // +で黄方向(緑寄り)へ、-で赤寄りへ
 
             // 自動判定の範囲（URLで調整可）
             // Hueは0..1で、黄はだいたい 0.06〜0.20 付近。
@@ -710,8 +714,8 @@
             //
             // 例) &orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005
             // 例) 判定調整: &orangeHueMin=0.02&orangeHueMax=0.07&orangeSatMin=0.22&orangeLumMin=0.18&orangeLumMax=0.85
-            const orangeLift = parseFloat(params.get('orangeLift') || '1.0');
-            const orangeSat  = parseFloat(params.get('orangeSat')  || '1.0');
+            const orangeLift = parseFloat(params.get('orangeLift') || '0.8');
+            const orangeSat  = parseFloat(params.get('orangeSat')  || '0.9');
             const orangeHue  = parseFloat(params.get('orangeHue')  || '0.0'); // +で黄寄り、-で赤寄り
 
             // 黄(h≈0.075)と茶(h≈0.05, 暗い)の間に入りやすいので、デフォルトを少し狭める
@@ -811,8 +815,8 @@
             // ---- Blue (blue parts) ----
             // 目的：青を個別に調整
             // 例) &blueLift=1.04&blueSat=0.98&blueHue=0.0
-            const blueLift = parseFloat(params.get('blueLift') || '1.0');
-            const blueSat  = parseFloat(params.get('blueSat')  || '1.0');
+            const blueLift = parseFloat(params.get('blueLift') || '1.5');
+            const blueSat  = parseFloat(params.get('blueSat')  || '0.8');
             const blueHue  = parseFloat(params.get('blueHue')  || '0.0');
 
             const blueHueMin = parseFloat(params.get('blueHueMin') || '0.58');
@@ -852,8 +856,8 @@
 
             // ---- Gray (low-saturation parts) ----
             // デフォルトは無効（1.0）
-            const grayLift = parseFloat(params.get('grayLift') || '1.0');
-            const graySat  = parseFloat(params.get('graySat')  || '1.0');
+            const grayLift = parseFloat(params.get('grayLift') || '2.0');
+            const graySat  = parseFloat(params.get('graySat')  || '0.92');
             const graySatMax = parseFloat(params.get('graySatMax') || '0.14');
             const grayLumMin = parseFloat(params.get('grayLumMin') || '0.06');
             const grayLumMax = parseFloat(params.get('grayLumMax') || '0.65');
@@ -1047,14 +1051,18 @@
     }
     requestAnimationFrame(tick);
 
-console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  swapSat=on（redSat/pinkSat入替） |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  pinkAlt=on（明るい赤→ピンク救済） |  sat=0.95（単色の全体彩度・任意） |  greenLift=1.25（深緑を明るく） |  grayLift=1.18&graySat=0.92（グレーを明るく） |  greenMats=MB_37 / grayMats=MB_12,MB_99（マテ名で強制） |  brownLift=1.22&brownSat=1.08（茶床を明るく） |  brownMats=MB_12（茶床をマテ名で強制） |  yellowLift=1.05&yellowSat=1.02&yellowHue=0.02（黄パーツを黄寄りに） |  yellowMats=MB_12（黄をマテ名で強制） |  blueLift=1.04&blueSat=0.98&blueHue=0.0（青調整） |  cyanLift=1.05&cyanSat=0.98&cyanHue=0.0（水色調整） |  orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005（オレンジ調整） |  blueMats=MB_12 / cyanMats=MB_34 / orangeMats=MB_56（マテ名で強制） |  backLight=0.28（裏側ライト） |  intro=off');
+console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  swapSat=on（redSat/pinkSat入替） |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  pinkAlt=on（明るい赤→ピンク救済） |  sat=0.95（単色の全体彩度・任意） |  greenLift=1.25（深緑を明るく） |  grayLift=1.18&graySat=0.92（グレーを明るく） |  greenMats=MB_37 / grayMats=MB_12,MB_99（マテ名で強制） |  brownLift=1.22&brownSat=1.08（茶床を明るく） |  brownMats=MB_12（茶床をマテ名で強制） |  yellowLift=1.05&yellowSat=1.02&yellowHue=0.02（黄パーツを黄寄りに） |  yellowMats=MB_12（黄をマテ名で強制） |  blueLift=1.04&blueSat=0.98&blueHue=0.0（青調整） |  cyanLift=1.05&cyanSat=0.98&cyanHue=0.0（水色調整） |  orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005（オレンジ調整） |  blueMats=MB_12 / cyanMats=MB_34 / orangeMats=MB_56（マテ名で強制） |  backLight=0.28（裏側ライト） |  intro=off');
   </script>
 
   <!--
   使い方（段階的に追加した機能）
 
   1) 純ビューア（UI消し）
-     /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off
+     - デフォルトで UI は非表示
+     /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl
+
+     UIを表示したい場合:
+     /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=on
 
   2) リッチなライティング
      - HDRを使う: &hdr=/asset/studio_small_09_2k.hdr
