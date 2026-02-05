@@ -154,6 +154,12 @@
     const rim = new THREE.DirectionalLight(0xffffff, 0.22);
     rim.position.set(0, 7, -9);
 
+    // 裏側ライト（背面が暗く沈むのを防ぐ）
+    // 例) ?backLight=0.28  （0で無効）
+    const backLightInt = parseFloat(params.get('backLight') || '2.0');
+    const back = new THREE.DirectionalLight(0xffffff, (isFinite(backLightInt) ? backLightInt : 2.0));
+    back.position.set(0, 5, -7);
+
     // トップ（床の暗さ対策：薄く）
     const top = new THREE.DirectionalLight(0xffffff, 0.18);
     top.position.set(0, 13, 0);
@@ -174,7 +180,7 @@
       // カメラ範囲はモデル毎にframeSelectionで設定
     }
 
-    scene.add(amb, hemi, key, fill, rim, top);
+    scene.add(amb, hemi, key, fill, rim, back, top);
 
     // 影受け（透明床）
     // デフォルトは無効（影が“透明床”に落ちないようにする）。
@@ -1041,7 +1047,7 @@
     }
     requestAnimationFrame(tick);
 
-console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  swapSat=on（redSat/pinkSat入替） |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  pinkAlt=on（明るい赤→ピンク救済） |  sat=0.95（単色の全体彩度・任意） |  greenLift=1.25（深緑を明るく） |  grayLift=1.18&graySat=0.92（グレーを明るく） |  greenMats=MB_37 / grayMats=MB_12,MB_99（マテ名で強制） |  brownLift=1.22&brownSat=1.08（茶床を明るく） |  brownMats=MB_12（茶床をマテ名で強制） |  yellowLift=1.05&yellowSat=1.02&yellowHue=0.02（黄パーツを黄寄りに） |  yellowMats=MB_12（黄をマテ名で強制） |  blueLift=1.04&blueSat=0.98&blueHue=0.0（青調整） |  cyanLift=1.05&cyanSat=0.98&cyanHue=0.0（水色調整） |  orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005（オレンジ調整） |  blueMats=MB_12 / cyanMats=MB_34 / orangeMats=MB_56（マテ名で強制） |  intro=off');
+console.log('%cUsage:', 'color:#7cc4ff', '例: /?model=/asset/nazo1/nazo1.obj&mtl=/asset/nazo1/nazo1.mtl&ui=off&intro=1.6  |  hdr=/asset/studio.hdr  |  exposure=1.0  |  tonemap=neutral|aces|linear  |  colorTune=off  |  redSat=0.99  |  pinkSat=0.86  |  swapSat=on（redSat/pinkSat入替） |  pinkLight=1.04  |  pinkHue=0.015  |  pinkLightAlt=0.62  |  pinkAlt=on（明るい赤→ピンク救済） |  sat=0.95（単色の全体彩度・任意） |  greenLift=1.25（深緑を明るく） |  grayLift=1.18&graySat=0.92（グレーを明るく） |  greenMats=MB_37 / grayMats=MB_12,MB_99（マテ名で強制） |  brownLift=1.22&brownSat=1.08（茶床を明るく） |  brownMats=MB_12（茶床をマテ名で強制） |  yellowLift=1.05&yellowSat=1.02&yellowHue=0.02（黄パーツを黄寄りに） |  yellowMats=MB_12（黄をマテ名で強制） |  blueLift=1.04&blueSat=0.98&blueHue=0.0（青調整） |  cyanLift=1.05&cyanSat=0.98&cyanHue=0.0（水色調整） |  orangeLift=1.06&orangeSat=1.03&orangeHue=-0.005（オレンジ調整） |  blueMats=MB_12 / cyanMats=MB_34 / orangeMats=MB_56（マテ名で強制） |  backLight=0.28（裏側ライト） |  intro=off');
   </script>
 
   <!--
