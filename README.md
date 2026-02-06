@@ -173,6 +173,12 @@ QR 系モデルで追加した「色グループ別」調整です。
 &debugColor=off
 ```
 
+## 例
+https://model-viewer-lilac-nu.vercel.app/?model=asset/QR/QR.obj&mtl=asset/QR/QR.mtl
+https://model-viewer-lilac-nu.vercel.app/?model=asset/QA/QA.obj&mtl=asset/QA/QA.mtl
+https://model-viewer-lilac-nu.vercel.app/?model=asset/QM/QM.obj&mtl=asset/QM/QM.mtl
+https://model-viewer-lilac-nu.vercel.app/?model=asset/Q/Q.obj&mtl=asset/Q/Q.mtl
+https://model-viewer-lilac-nu.vercel.app/?model=asset/GIFT/gift.obj&mtl=asset/GIFT/gift.mtl
 ---
 
 ## トラブルシュート
